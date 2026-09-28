@@ -15,7 +15,15 @@
 <body>
 <div id="app"></div>
 <div id="toast" class="toast hidden"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+const SUPABASE_URL = "https://mzbziblrehoxwyhvlplh.supabase.co";
+const SUPABASE_KEY = "sb_publishable_R2LrW7ifeNeHn3iwsqFnkw_-LNgUZ9-";
+
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
 const app=document.getElementById('app');
 const sample=[
 {id:1,title:'Khmer Kbach Floral Ornament',contributor:'Sok Dara',category:'Vector',formats:'AI, EPS, SVG',date:'Sep 28, 2026',status:'Pending',glyph:'❋',desc:'Traditional Khmer floral ornament vector design.'},
