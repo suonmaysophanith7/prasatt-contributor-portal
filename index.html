@@ -67,5 +67,70 @@ function categoryFilter(c){document.querySelectorAll('tbody tr').forEach(tr=>{le
 function exportCSV(){let rows=[['Title','Contributor','Category','Formats','Date','Status'],...submissions.map(x=>[x.title,x.contributor,x.category,x.formats,x.date,x.status])];let csv=rows.map(r=>r.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='prasatt-submissions.csv';a.click();URL.revokeObjectURL(a.href)}
 render();
 </script>
+
+<script>
+/* Supabase-connected contributor portal overrides */
+let currentUser = null;
+let currentProfile = null;
+const STORAGE_BUCKET = "design-files";
+function escHtml(v=""){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function contributorName(){return currentProfile?.full_name||currentUser?.user_metadata?.full_name||currentUser?.email||"Contributor";}
+function renderAuth(mode="login",message=""){
+ const signup=mode==="signup";
+ app.innerHTML=`<div class="login-wrap"><section class="login-art">${brand()}<div><h1>Share Khmer creativity with the world.</h1><p>Submit Khmer vectors, illustrations, fonts, patterns and 3D resources to the Prasatt Element community.</p></div><small style="color:#91b0a7">PRASATT ELEMENT · CONTRIBUTOR PORTAL</small></section><section class="login-box"><div class="login-card"><h2>${signup?"Create contributor account":"Welcome back"}</h2><p>${signup?"Register to submit and track your designs.":"Sign in to manage your design submissions."}</p>${message?`<p class="notice" style="color:#b42318">${escHtml(message)}</p>`:""}<form onsubmit="${signup?"signUp(event)":"signIn(event)"}">${signup?'<label>Full name</label><input id="auth-name" required autocomplete="name" placeholder="Your name">':""}<label>Email address</label><input id="auth-email" type="email" required autocomplete="email" placeholder="you@example.com"><label>Password</label><input id="auth-password" type="password" required minlength="6" autocomplete="${signup?"new-password":"current-password"}" placeholder="At least 6 characters"><button class="btn" type="submit">${signup?"Create account":"Sign in"}</button></form><p style="margin-top:18px;text-align:center">${signup?"Already registered?":"New contributor?"} <span class="link" onclick="renderAuth('${signup?"login":"signup"}')">${signup?"Sign in":"Create an account"}</span></p><p class="notice">Email confirmation may be required. Check your inbox after registration.</p></div></section></div>`;
+}
+async function signUp(e){
+ e.preventDefault();
+ const full_name=document.getElementById("auth-name").value.trim(),email=document.getElementById("auth-email").value.trim(),password=document.getElementById("auth-password").value;
+ const {data,error}=await supabaseClient.auth.signUp({email,password,options:{data:{full_name}}});
+ if(error){renderAuth("signup",error.message);return;}
+ if(data.user){const r=await supabaseClient.from("profiles").upsert({id:data.user.id,full_name,email,role:"contributor"},{onConflict:"id"});if(r.error)console.warn("Profile upsert:",r.error.message);}
+ if(data.session){await loadSupabasePortal();toast("Account created.");}else renderAuth("login","Please check your email to confirm your account, then sign in.");
+}
+async function signIn(e){
+ e.preventDefault();const email=document.getElementById("auth-email").value.trim(),password=document.getElementById("auth-password").value;
+ const {error}=await supabaseClient.auth.signInWithPassword({email,password});
+ if(error){renderAuth("login",error.message);return;}await loadSupabasePortal();toast("Signed in.");
+}
+async function signOut(){const {error}=await supabaseClient.auth.signOut();if(error){toast(error.message);return;}currentUser=null;currentProfile=null;submissions=[];renderAuth();}
+async function loadSupabasePortal(){
+ const {data:{user},error}=await supabaseClient.auth.getUser();if(error||!user){currentUser=null;renderAuth();return;}
+ currentUser=user;
+ const pr=await supabaseClient.from("profiles").select("*").eq("id",user.id).maybeSingle();
+ currentProfile=pr.data||{id:user.id,full_name:user.user_metadata?.full_name||user.email,email:user.email,role:"contributor"};
+ role=currentProfile.role==="admin"?"admin":"contributor";
+ let q=supabaseClient.from("submissions").select("*").order("created_at",{ascending:false});
+ if(role!=="admin")q=q.eq("user_id",user.id);
+ const result=await q;
+ if(result.error){submissions=[];toast("Signed in, but submissions failed to load. Check table columns and RLS.");console.error(result.error);}else submissions=result.data||[];
+ page="dashboard";render();
+}
+function myRows(){return role==="admin"?submissions:submissions.filter(x=>x.user_id===currentUser?.id);}
+function row(x){
+ const name=x.contributor_name||x.profiles?.full_name||"Contributor",formats=Array.isArray(x.formats)?x.formats.join(", "):(x.formats||""),date=x.created_at?new Date(x.created_at).toLocaleDateString():"";
+ return `<tr data-search="${escHtml((x.title+" "+name+" "+x.category).toLowerCase())}"><td><div class="resource"><div class="thumb">✧</div><div><strong>${escHtml(x.title)}</strong><small>${escHtml(x.category)} · ${escHtml(formats)}</small></div></div></td><td>${escHtml(name)}</td><td>${escHtml(date)}</td><td><span class="badge ${statusClass(x.status)}">${escHtml(x.status||"Pending")}</span></td><td><div class="actions"><button class="iconbtn" onclick="selectSubmission('${escHtml(x.id)}')">⌕</button>${role==="admin"?`<button class="iconbtn" onclick="setStatus('${escHtml(x.id)}','Approved')">✓</button><button class="iconbtn" onclick="setStatus('${escHtml(x.id)}','Needs Changes')">✎</button><button class="iconbtn" onclick="setStatus('${escHtml(x.id)}','Rejected')">×</button>`:""}</div></td></tr>`;
+}
+function stats(){const a=myRows();return `<div class="stats">${[{n:a.length,l:"Total Submissions",g:"▤"},{n:a.filter(x=>x.status==="Pending").length,l:"Pending Review",g:"◷"},{n:a.filter(x=>x.status==="Approved").length,l:"Approved",g:"✓"},{n:a.filter(x=>x.status==="Needs Changes").length,l:"Needs Changes",g:"✎"}].map(x=>`<div class="stat"><div class="stat-icon">${x.g}</div><strong>${x.n}</strong><span>${x.l}</span></div>`).join("")}</div>`;}
+function dashboard(){const a=myRows();return `${stats()}<section class="panel"><div class="panel-head"><div><h2>Recent Submissions</h2><div class="muted">Your latest design submissions and review statuses.</div></div><button class="btn" onclick="go('${role==="admin"?"submissions":"upload"}')">${role==="admin"?"View Submissions":"Upload New Design"}</button></div>${table(a.slice(0,5))}</section>`;}
+function submissionsView(){let a=myRows();if(filter!=="All")a=a.filter(x=>x.status===filter);return `${stats()}<section class="panel"><div class="panel-head"><h2>${role==="admin"?"All Submissions":"My Submissions"}</h2></div><div class="tabs">${["All","Pending","Approved","Needs Changes","Rejected"].map(s=>`<button class="tab ${filter===s?"active":""}" onclick="filter='${s}';render()">${s}</button>`).join("")}</div>${table(a)}</section>`;}
+function uploadView(){return `<section class="panel"><div class="panel-head"><div><h2>Share your Khmer design resource</h2><div class="muted">Upload artwork for review by the Prasatt Element team.</div></div></div><form onsubmit="submitResource(event)"><div class="form-grid"><div><label class="dropzone" for="files"><div class="upload-icon">☁</div><p>Choose design files to upload</p><small>AI, EPS, SVG, PSD, PNG, JPG, ZIP, TTF, OTF · Up to 50 MB per file</small><input id="files" type="file" multiple hidden onchange="showFiles(this.files)"></label><div id="file-list" class="file-list"></div><div class="form-row"><label>Resource title *</label><input id="title" required placeholder="Design title"></div><div class="form-row"><label>Description *</label><textarea id="desc" required placeholder="Describe your design..."></textarea></div></div><div><div class="form-row"><label>Category *</label><select id="category" required><option value="">Select category</option>${["Vector","Khmer Kbach","Illustration","Pattern","Font","3D Model","Photography","Other"].map(c=>`<option>${c}</option>`).join("")}</select></div><div class="form-row"><label>Tags</label><input id="tags" placeholder="khmer, kbach, vector"></div><div class="form-row"><label>License / ownership *</label><select id="license" required><option value="">Choose one</option><option>I created this work and own the rights</option><option>I have permission to submit this work</option></select></div><div class="form-row"><label><input id="agree" type="checkbox" required style="width:auto"> I confirm I have the right to submit these files.</label></div><button class="btn" id="submit-btn" type="submit">Upload and Submit for Review →</button></div></div></form></section>`;}
+function profileView(){return `<section class="panel"><h2>My Profile</h2><p><b>Name:</b> ${escHtml(contributorName())}</p><p><b>Email:</b> ${escHtml(currentUser?.email||"")}</p></section>`;}
+function render(){if(!currentUser){renderAuth();return;}const body=page==="dashboard"?dashboard():["submissions","my-submissions"].includes(page)?submissionsView():page==="upload"?uploadView():page==="profile"?profileView():genericView();app.innerHTML=`<div class="shell">${sidebar()}<main class="main">${header()}<div class="content"><div class="view active">${body}</div></div></main></div>`;}
+function showFiles(f){files=[...f];const el=document.getElementById("file-list");if(el)el.innerHTML=files.map(f=>`<div class="file-item"><span>▤ ${escHtml(f.name)}</span><span>${(f.size/1048576).toFixed(2)} MB</span></div>`).join("");}
+async function submitResource(e){
+ e.preventDefault();if(!currentUser){renderAuth();return;}if(!files.length){toast("Please select at least one file.");return;}if(files.some(f=>f.size>50*1048576)){toast("Each file must be 50 MB or less.");return;}
+ const btn=document.getElementById("submit-btn");btn.disabled=true;btn.textContent="Uploading…";const uploaded=[];
+ try{
+  for(const file of files){const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"_"),path=`${currentUser.id}/${Date.now()}-${crypto.randomUUID()}-${safe}`;const {error}=await supabaseClient.storage.from(STORAGE_BUCKET).upload(path,file,{upsert:false,contentType:file.type||"application/octet-stream"});if(error)throw error;uploaded.push({path,name:file.name,size:file.size,type:file.type,format:file.name.split(".").pop().toUpperCase()});}
+  const payload={user_id:currentUser.id,contributor_name:contributorName(),title:document.getElementById("title").value.trim(),category:document.getElementById("category").value,description:document.getElementById("desc").value.trim(),formats:[...new Set(uploaded.map(f=>f.format))],file_paths:uploaded,tags:document.getElementById("tags").value.split(",").map(s=>s.trim()).filter(Boolean),license:document.getElementById("license").value,status:"Pending"};
+  const {error}=await supabaseClient.from("submissions").insert(payload);if(error)throw error;files=[];await loadSupabasePortal();toast("Submission uploaded for review.");
+ }catch(err){console.error(err);toast("Upload failed: "+(err.message||"Check Supabase policies and table columns."));btn.disabled=false;btn.textContent="Upload and Submit for Review →";}
+}
+async function setStatus(id,status){if(role!=="admin"){toast("Admin access required.");return;}const {error}=await supabaseClient.from("submissions").update({status}).eq("id",id);if(error){toast(error.message);return;}await loadSupabasePortal();toast("Status updated.");}
+async function selectSubmission(id){const x=submissions.find(s=>String(s.id)===String(id));if(x)alert(`${x.title}\nCategory: ${x.category}\nStatus: ${x.status}\nDescription: ${x.description||""}`);}
+supabaseClient.auth.onAuthStateChange((event,session)=>{if(event==="SIGNED_IN"&&session?.user)setTimeout(loadSupabasePortal,0);if(event==="SIGNED_OUT"){currentUser=null;currentProfile=null;submissions=[];renderAuth();}});
+(async()=>{const {data:{session}}=await supabaseClient.auth.getSession();if(session)await loadSupabasePortal();else renderAuth();})();
+</script>
+
 </body>
 </html>
