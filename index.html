@@ -81,7 +81,23 @@ async function loadPortal(){
   let submissionQuery=supabaseClient.from("submissions").select("id,user_id,title,description,asset_type,file_path,status,admin_notes,created_at,updated_at,contributor_name,category,formats,file_paths,tags,license");if(!isAdmin())submissionQuery=submissionQuery.eq("user_id",user.id);const {data,error:subError}=await submissionQuery.order("created_at",{ascending:false});
   if(subError)throw subError;submissions=data||[];
   // Private bucket assets require short-lived signed URLs for browser display.
-  await Promise.all(submissions.map(async item=>{item.thumbnail_url=null;const paths=Array.isArray(item.file_paths)?item.file_paths:[];const thumbPath=paths.find(f=>f&&f.thumbnail_path)?.thumbnail_path||null;if(!thumbPath)return;try{const {data: signed,error}=await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(thumbPath,3600);if(error)throw error;item.thumbnail_url=signed?.signedUrl||null;}catch(err){console.warn("Could not load thumbnail for submission",item.id,err.message);}}));
+  await Promise.all(submissions.map(async item=>{
+    item.thumbnail_url=null;
+    const paths=Array.isArray(item.file_paths)?item.file_paths:[];
+    const imageTypes=["PNG","JPG","JPEG","WEBP","GIF","BMP"];
+    const isImage=(value)=>imageTypes.includes(String(value||"").replace(/^.*\\./,"").toUpperCase());
+    const thumbPath=paths.find(f=>f&&f.thumbnail_path)?.thumbnail_path||null;
+    // For older submissions without generated thumbnails, fall back to the original image file.
+    const originalImage=paths.find(f=>f&&f.path&&isImage(f.format||f.name))?.path
+      || (item.file_path&&isImage(paths[0]?.format||paths[0]?.name||item.formats?.[0])?item.file_path:null);
+    const previewPath=thumbPath||originalImage;
+    if(!previewPath)return;
+    try{
+      const {data:signed,error}=await supabaseClient.storage.from(STORAGE_BUCKET).createSignedUrl(previewPath,3600);
+      if(error)throw error;
+      item.thumbnail_url=signed?.signedUrl||null;
+    }catch(err){console.warn("Could not load preview for submission",item.id,err.message);}
+  }));
   render();
 }
 async function submitResource(e){
